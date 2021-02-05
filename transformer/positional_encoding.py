@@ -15,8 +15,28 @@ def get_positional_encoding(dim, max_len=5000):
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, dim_input, dropout_prob, max_len):
+    def __init__(self, dim_input, dropout_prob, max_len=5000):
         super().__init__()
         self.dropout = nn.Dropout(dropout_prob)
-        self.regis
-        
+        self.register_buffer("positional_encodings", get_positional_encoding(dim_input, max_len))
+    
+    def forward(self, x):
+        pe = self.positional_encodings[:x.shape[0]].detach().requires_grad_(False)
+        x = x + pe
+        x = self.dropout(x)
+        return x
+
+
+if __name__ == "__main__":
+    x = torch.randint(1, 10, size=(5, 10)).float()
+    print(x.shape)
+    print(x)
+    pe = PositionalEncoding(10, 0, 10)
+    x = pe(x)
+    print(x.shape)
+    print(x)
+    y = get_positional_encoding(10, 5)
+    print(y.shape)
+    print(y)
+
+
