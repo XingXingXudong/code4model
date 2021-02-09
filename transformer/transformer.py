@@ -48,7 +48,7 @@ class EmbeddingWithLearnedPositionalEncoding(nn.Module):
         self.positional_encodings = nn.Parameter(torch.zeros(max_len, 1, dim), requires_grad=True)
 
     def forward(self, x):
-        pe = self.positional_encodings[:x.shape[0]].requires_grad_(False)
+        pe = self.positional_encodings[:x.shape[0]]
         # 有部分实现为：self.emb(x) * math.sqrt(self.dim) + pe, 这里之所以是要乘以math.sqrt(self.dim)，原因还是
         # 要保持embedings为0-均值，1-方差的分布，之所以有代码这么实现，就是应为self.emb的分布为0均值，1/self.dim方差的。
         return self.emb(x) * math.sqrt(self.dim) + pe
@@ -123,7 +123,7 @@ class Encoder(nn.Module):
         # self.layers = nn.ModuleList([copy(layer) for _ in range(num_layer)])
         self.layers = nn.ModuleList([layer for _ in range(num_layer)])
         # final normalization layer
-        self.norm = nn.LayerNorm([layer.size])
+        self.norm = nn.LayerNorm([layer.dim])
 
     def forward(self, x, mask):
         for layer in self.layers:
@@ -140,9 +140,10 @@ class Decoder(nn.Module):
     def __init__(self, layer, num_layer):
         super().__init__()
         # make copeis of transformer layers
-        self.layers = nn.ModuleList([copy(layer) for _ in range(num_layer)])
+        # self.layers = nn.ModuleList([copy(layer) for _ in range(num_layer)])
+        self.layers = nn.ModuleList([layer for _ in range(num_layer)])
         # final normalization layer
-        self.norm = nn.LayerNorm([layer.size])
+        self.norm = nn.LayerNorm([layer.dim])
 
     def forward(self, x, memory, src_mask, tgt_mask):
         for layer in self.layers:
@@ -151,6 +152,7 @@ class Decoder(nn.Module):
 
 class EncoderDecoder(nn.Module):
     def __init__(self, encoder, decoder, src_emb, tgt_emb):
+        super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.src_emb = src_emb
@@ -180,7 +182,7 @@ class Seq2seqModel(nn.Module):
 
         self.enc_layer = TransformerLayer(
             dim, 
-            MultiHeadAttention(6, dim, 0.1),
+            MultiHeadAttention(8, dim, 0.1),
             None, 
             nn.Linear(dim, dim),
             0.1
@@ -189,8 +191,8 @@ class Seq2seqModel(nn.Module):
 
         self.dec_layer = TransformerLayer(
             dim, 
-            MultiHeadAttention(6, dim, 0.1),
-            MultiHeadAttention(6, dim, 0.1),
+            MultiHeadAttention(8, dim, 0.1),
+            MultiHeadAttention(8, dim, 0.1),
             nn.Linear(dim, dim), 
             0.1
         )
@@ -208,9 +210,14 @@ class Seq2seqModel(nn.Module):
 
 
 if __name__ == '__main__':
-    m = Seq2seqModel(100, 2, 200, 2, 128)
+    m = Seq2seqModel(128, 100, 2, 200, 2, 128)
     src = torch.Tensor([[1, 2, 1, 3], [4, 10, 4, 1]]).long()
+    src = src.transpose(1, 0)
     tgt = torch.Tensor([[1, 2, 1, 3], [4, 10, 4, 1]]).long()
+    tgt = tgt.transpose(1, 0)
     y = m(src, tgt, None, None)
+    y = y.transpose(1, 0)
     print(y)
+    print(y.shape)
+    
 
