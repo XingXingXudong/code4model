@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import torch
+from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -128,4 +129,69 @@ def attention(query, key, value, mask=None, dropout=None):
     
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, h, )
+    def __init__(self, h, d_model, dropout=0.1):
+        super().__init__()
+        assert d_model % h == 0
+        self.d_k = d_model // h
+        self.h = h
+        self.linears = clone(nn.Linear(d_model, d_model), 4)
+        self.attn = None
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, query, key, value, mask=None):
+        if mask is not None:
+            # same mask applied all heads
+            mask = mask.unsqueeze(1)
+        nbatches = query.size(0)
+        # 1) do all the linear projections in batch from d_model => h x d_k
+        query, key, value = \
+            [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2) 
+            for l, x in zip(self.linears, (query, key, value))]
+
+        # 2) apply attention on all the projected vector in batch
+        x, self.attn = attention(query, key, value, mask, self.dropout)
+
+        # 3) concat using a view and apply a final linea.
+        x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
+
+        return self.linears[-1](x)
+
+
+class PositionwiseFeedForward(nn.Module):
+    def __init__(self, d_model, d_ff, dropout=0.1):
+        super().__init__()
+        self.w1 = nn.Linear(d_model, d_ff)
+        self.w2 = nn.Linear(d_ff, d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return self.w2(self.dropout(F.relu(self.w1(x))))
+
+
+class Embeddings(nn.Module):
+    def __init__(self, d_model, vocab_size):
+        super().__init__()
+        self.lut = nn.Embedding(vocab_size, d_model)
+        self.d_model = d_model
+
+    def forward(self, x):
+        return self.lut(x) * math.sqrt(self.d_model)
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout, max_len=5000):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+
+        # computing position encodings once in log space.
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe.unsqueeze_(0)   # expand the batch dim
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + Variable(self.pe[:, :x.size(1)], required_grad=False)
+        return self.dropout(x)
