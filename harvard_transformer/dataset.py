@@ -1,6 +1,9 @@
 import json
 import numpy as np
 import pandas as pd
+import jieba
+import torch
+from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
 
@@ -324,7 +327,7 @@ class NMTDataset(Dataset):
         Returns:
             an instance of SurnameDataset
         """
-        text_df = pd.read_csv(dataset_csv)
+        text_df = pd.read_csv(dataset_csv, sep='\t')
         train_subset = text_df[text_df.split == 'train']
         return cls(text_df, NMTVectorizer.from_dataframe(train_subset))
 
@@ -402,10 +405,17 @@ class NMTDataset(Dataset):
         return len(self) // batch_size
 
 
+def subsequent_mask(size):
+    attn_shape = (1, size, size)
+    subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
+    return torch.from_numpy(subsequent_mask) == 0
+
+
 def generate_nmt_batches(dataset,
                          batch_size,
                          shuffle=True,
                          drop_last=True,
+                         make_mask=True,
                          device="cpu"):
     """A generator function which wraps the PyTorch DataLoader.  The NMT Version """
     dataloader = DataLoader(dataset=dataset,
@@ -421,4 +431,86 @@ def generate_nmt_batches(dataset,
         for name, tensor in data_dict.items():
             out_data_dict[name] = data_dict[name][sorted_length_indices].to(
                 device)
+        out_data_dict['ntokens'] = (
+            out_data_dict['y_target'] != 
+            dataset._vectorizer.target_vocab.lookup_token('<MASK>')).data.sum()
+        if make_mask:
+            out_data_dict['src_mask'] = (
+                out_data_dict['x_source'] !=
+                dataset._vectorizer.source_vocab.lookup_token('<MASK>')
+            ).unsqueeze(-2).to(device)
+            tgt_mask = (out_data_dict['x_target'] !=
+                        dataset._vectorizer.target_vocab.lookup_token('<MASK>')
+                        ).unsqueeze(-2)
+            tgt_mask = tgt_mask & Variable(
+                subsequent_mask(out_data_dict['x_target'].size(-1)).type_as(
+                    tgt_mask.data))
+            out_data_dict['tgt_mask'] = tgt_mask.to(device)
         yield out_data_dict
+
+
+def vec2string(dataset, datadict):
+    strdict = {}
+    for n in ['x_source', 'x_target', 'y_target']:
+        _, st = n.split('_')
+        if st == 'source':
+            vocab = dataset._vectorizer.source_vocab
+        else:
+            vocab = dataset._vectorizer.target_vocab
+        array = datadict[n].numpy()
+        strings = []
+        for i in range(array.shape[0]):
+            strings.append([vocab.lookup_index(id) for id in array[i, :]])
+        strdict[n] = strings
+    return strdict
+
+# 处理中-英翻译数据集
+def en_token(sq):
+    return " ".join(sq.strip().split(' '))
+
+
+def zh_token(sq):
+    return " ".join(jieba.lcut(sq.strip()))
+
+
+def split(N, tags=('train', 'val', 'test'), ps=(0.7, 0.2, 0.1)):
+    return np.random.choice(tags, N, ps)
+
+
+def data_process(trans_json):
+    lines = []
+    with open(trans_json, 'r') as fr:
+        for i, line in enumerate(fr.readlines()):
+            if i % 1001 == 1: 
+                print('process: ', i)
+            ct = json.loads(line.strip())
+            lines.append((en_token(ct['english']), zh_token(ct['chinese'])))
+    df = pd.DataFrame(lines, columns=['source_language', 'target_language'])
+    df['split'] = split(len(lines))
+    return df
+
+
+def test_data_process():
+    trans_json = "/home/liuxd/home/NLP/PyTorchNLPBook/code4model/data/translation2019zh_train.json"
+    save_path = "/home/liuxd/home/NLP/PyTorchNLPBook/code4model/data/translation2019zh_train-df.csv"
+    rtn = data_process(trans_json)
+    rtn.to_csv(save_path, sep='\t', index=False)
+    print(rtn)
+
+
+if __name__ == '__main__':
+    dataset = NMTDataset.load_dataset_and_make_vectorizer(
+        "/home/liuxd/home/NLP/PyTorchNLPBook/code4model/data/translation2019zh_train-df_200w.csv"
+    )
+    batchs = generate_nmt_batches(dataset, 2)
+    batch = next(batchs)
+    print(batch['x_source'])
+    print(batch['src_mask'])
+    print(batch['x_target'])
+    print(batch['tgt_mask'])
+    print(batch['y_target'])
+    print("==============================")
+    print(batch['ntokens'])
+    print("==============================")
+    print(batch['x_source_length'])
+    print(vec2string(dataset, batch))
