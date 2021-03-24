@@ -1,18 +1,16 @@
-import time 
+import time
 import copy
 import math
-from typing import Sequence
 import numpy as np
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.modules.container import Sequential
-from torch.nn.modules.sparse import Embedding
 
 from utils import clone
 
 global max_src_in_batch, max_tgt_in_batch
+
 
 class EncoderDecoder(nn.Module):
     def __init__(self, encoder, decoder, src_embed, tgt_embed, generator):
@@ -47,7 +45,7 @@ class Encoder(nn.Module):
     def __init__(self, layer, N):
         super().__init__()
         self.layers = clone(layer, N)
-        self.norm = LayerNorm(layer.size);
+        self.norm = LayerNorm(layer.size)
 
     def forward(self, x, mask):
         for layer in self.layers:
@@ -66,6 +64,7 @@ class LayerNorm(nn.Module):
         mean = x.mean(-1, keepdim=True)
         std = x.std(-1, keepdim=True)
         return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
+
 
 class SublayerConnection(nn.Module):
     def __init__(self, size, dropout):
@@ -96,7 +95,7 @@ class Decoder(nn.Module):
         self.layers = clone(layer, N)
         self.norm = LayerNorm(layer.size)
 
-    def forward(self, x, memory,  src_mask, tgt_mask):
+    def forward(self, x, memory, src_mask, tgt_mask):
         for layer in self.layers:
             x = layer(x, memory, src_mask, tgt_mask)
         return self.norm(x)
@@ -117,23 +116,25 @@ class DecoderLayer(nn.Module):
         x = self.sublayers[1](x, lambda x: self.src_attn(x, m, m, src_mask))
         return self.sublayers[2](x, self.feed_forward)
 
+
 def subsequent_mask(size):
     attn_shape = (1, size, size)
     subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
     return torch.from_numpy(subsequent_mask) == 0
+
 
 def attention(query, key, value, mask=None, dropout=None):
     """compute scaled dot production attention."""
     d_k = query.size(-1)
     scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
     if mask is not None:
-        scores.masked_fill_(mask==0, -1e9)
+        scores.masked_fill_(mask == 0, -1e9)
     p_attn = F.softmax(scores, dim=-1)
     if dropout is not None:
         p_attn = dropout(p_attn)
 
     return torch.matmul(p_attn, value), p_attn
-    
+
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, h, d_model, dropout=0.1):
@@ -151,15 +152,16 @@ class MultiHeadAttention(nn.Module):
             mask = mask.unsqueeze(1)
         nbatches = query.size(0)
         # 1) do all the linear projections in batch from d_model => h x d_k
-        query, key, value = \
-            [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2) 
-            for l, x in zip(self.linears, (query, key, value))]
-
+        query, key, value = [
+            li(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
+            for li, x in zip(self.linears, (query, key, value))
+        ]
         # 2) apply attention on all the projected vector in batch
         x, self.attn = attention(query, key, value, mask, self.dropout)
 
         # 3) concat using a view and apply a final linea.
-        x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
+        x = x.transpose(1, 2).contiguous().view(nbatches, -1,
+                                                self.h * self.d_k)
 
         return self.linears[-1](x)
 
@@ -193,10 +195,11 @@ class PositionalEncoding(nn.Module):
         # computing position encodings once in log space.
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe.unsqueeze_(0)   # expand the batch dim
+        pe.unsqueeze_(0)  # expand the batch dim
         self.register_buffer('pe', pe)
 
     def forward(self, x):
@@ -204,7 +207,13 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-def make_model(src_vocab, tgt_vocab, N=6, d_model=512, d_ff=2048, h=8, dropout=0.1):
+def make_model(src_vocab,
+               tgt_vocab,
+               N=6,
+               d_model=512,
+               d_ff=2048,
+               h=8,
+               dropout=0.1):
     c = copy.deepcopy
     attn = MultiHeadAttention(h, d_model)
     ff = PositionwiseFeedForward(d_model, d_ff, dropout)
@@ -214,8 +223,7 @@ def make_model(src_vocab, tgt_vocab, N=6, d_model=512, d_ff=2048, h=8, dropout=0
         Decoder(DecoderLayer(d_model, c(attn), c(attn), c(ff), dropout), N),
         nn.Sequential(Embeddings(d_model, src_vocab), c(position)),
         nn.Sequential(Embeddings(d_model, tgt_vocab), c(position)),
-        Generator(d_model, tgt_vocab)
-    )
+        Generator(d_model, tgt_vocab))
     # Initialize parameters with Glorot / fan_vag.
     for p in model.parameters():
         if p.dim() > 1:
@@ -238,8 +246,10 @@ class Batch:
     def make_std_mask(tgt, pad):
         """create a mask to hide padding and feture words."""
         tgt_mask = (tgt != pad).unsqueeze(-2)
-        tgt_mask = tgt_mask & Variable(subsequent_mask(tgt.size(-1)).type_as(tgt_mask.data))
+        tgt_mask = tgt_mask & Variable(
+            subsequent_mask(tgt.size(-1)).type_as(tgt_mask.data))
         return tgt_mask
+
 
 def run_epoch(data_iter, model, loss_compute):
     start = time.time()
@@ -255,7 +265,8 @@ def run_epoch(data_iter, model, loss_compute):
 
         if i % 50 == 1:
             elapsed = time.time() - start
-            print("Epoch Step: %d Loss: %f Tokens per Sec: %f." % (i, loss / batch.ntokens, total_tokens / elapsed))
+            print("Epoch Step: %d Loss: %f Tokens per Sec: %f." %
+                  (i, loss / batch.ntokens, total_tokens / elapsed))
             start = time.time()
             tokens = 0
 
@@ -271,11 +282,12 @@ def batch_size_fn(new, count, sofar):
 
     max_src_in_batch = max(max_src_in_batch, len(new.src))
     max_tgt_in_batch = max(max_tgt_in_batch, len(new.tgt) + 2)
-    
+
     src_elements = count * max_src_in_batch
     tgt_elements = count * max_tgt_in_batch
 
     return max(src_elements, tgt_elements)
+
 
 class NoamOpt:
     def __init__(self, model_size, factor, warmup, optimizer):
@@ -299,11 +311,16 @@ class NoamOpt:
         """implement `lrate` above"""
         if step is None:
             step = self._step
-        return self.factor * (self.model_size**(-0.5) * min(step**(-0.5), step*self.warmup**(-1.5)))
+        return self.factor * (self.model_size**(-0.5) *
+                              min(step**(-0.5), step * self.warmup**(-1.5)))
+
 
 def get_std_opt(model):
-    return NoamOpt(model.src_embed[0].d_model, 2, 4000, 
-                   torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
+    return NoamOpt(
+        model.src_embed[0].d_model, 2, 4000,
+        torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98),
+                         eps=1e-9))
+
 
 class LabelSmoothing(nn.Module):
     def __init__(self, size, padding_idx, smoothing=0.0):
@@ -314,7 +331,7 @@ class LabelSmoothing(nn.Module):
         self.smoothing = smoothing
         self.size = size
         self.true_dist = None
-    
+
     def forward(self, x, target):
         assert x.size(1) == self.size
         true_dist = x.data.clone()
@@ -328,6 +345,7 @@ class LabelSmoothing(nn.Module):
 
         return self.criterion(x, Variable(true_dist, requires_grad=False))
 
+
 def gen_data(V, batch, nbatchs):
     for i in range(nbatchs):
         data = torch.from_numpy(np.random.randint(1, V, size=(batch, 10)))
@@ -335,7 +353,8 @@ def gen_data(V, batch, nbatchs):
         src = Variable(data, requires_grad=False)
         tgt = Variable(data, requires_grad=False)
         yield Batch(src, tgt, 0)
-    
+
+
 class SimpleLossCompute:
     def __init__(self, generator, criterion, opt=None):
         self.generator = generator
@@ -360,14 +379,17 @@ def greedy_decode(model, src, src_mask, max_len, start_symbol):
     model.eval()
     memory = model.encode(src, src_mask)
     ys = torch.ones(1, 1).fill_(start_symbol).type_as(src.data)
-    for i in range(max_len-1):
-        out = model.decode(memory, src_mask, Variable(ys), Variable(subsequent_mask(ys.size(1)).type_as(src.data)))
+    for i in range(max_len - 1):
+        out = model.decode(
+            memory, src_mask, Variable(ys),
+            Variable(subsequent_mask(ys.size(1)).type_as(src.data)))
         prob = model.generator(out[:, -1])
         _, next_word = torch.max(prob, dim=1)
         next_word = next_word.item()
-        ys = torch.cat([ys, torch.ones(1,1).fill_(next_word).type_as(src.data)], dim=1)
+        ys = torch.cat(
+            [ys, torch.ones(1, 1).fill_(next_word).type_as(src.data)], dim=1)
 
-    if is_traing: 
+    if is_traing:
         model.train()
 
     return ys
@@ -380,11 +402,16 @@ if __name__ == '__main__':
     criterion = LabelSmoothing(size=V, padding_idx=0, smoothing=0.01)
     model = make_model(V, V, N=2)
     print(greedy_decode(model, src, src_mask, max_len=10, start_symbol=1))
-    model_opt = NoamOpt(model.src_embed[0].d_model, 1, 400, 
-                        torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
+    model_opt = NoamOpt(
+        model.src_embed[0].d_model, 1, 400,
+        torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98),
+                         eps=1e-9))
     for epcho in range(10):
         model.train()
-        run_epoch(gen_data(V, 30, 20), model, SimpleLossCompute(model.generator, criterion, model_opt))
+        run_epoch(gen_data(V, 30, 20), model,
+                  SimpleLossCompute(model.generator, criterion, model_opt))
         print(greedy_decode(model, src, src_mask, max_len=10, start_symbol=1))
     model.eval()
-    print(run_epoch(gen_data(V, 30, 5), model, SimpleLossCompute(model.generator, criterion, None)))
+    print(
+        run_epoch(gen_data(V, 30, 5), model,
+                  SimpleLossCompute(model.generator, criterion, None)))
